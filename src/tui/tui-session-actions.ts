@@ -286,6 +286,7 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const loadHistory = async () => {
+    let historyCleared = false;
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
@@ -304,6 +305,7 @@ export function createSessionActions(context: SessionActionContext) {
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll({ preservePendingUsers: true });
+      historyCleared = true;
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {
@@ -358,7 +360,9 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.restorePendingUsers();
       state.historyLoaded = true;
     } catch (err) {
-      chatLog.restorePendingUsers();
+      if (historyCleared) {
+        chatLog.restorePendingUsers();
+      }
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
     setActivityStatus(state.activityStatus);

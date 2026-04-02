@@ -47,6 +47,7 @@ type CommandHandlerContext = {
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
+  clearLocalRunIds?: () => void;
   requestExit: () => void;
 };
 
@@ -76,6 +77,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    clearLocalRunIds,
     requestExit,
   } = context;
 
@@ -482,10 +484,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           state.sessionInfo.inputTokens = null;
           state.sessionInfo.outputTokens = null;
           state.sessionInfo.totalTokens = null;
-          chatLog.clearPendingUsers();
           tui.requestRender();
 
           await client.resetSession(state.currentSessionKey, name);
+          clearLocalRunIds?.();
+          chatLog.clearPendingUsers();
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {

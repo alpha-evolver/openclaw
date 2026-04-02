@@ -768,6 +768,7 @@ export async function runTui(opts: TuiOptions) {
       noteLocalBtwRunId,
       forgetLocalRunId,
       forgetLocalBtwRunId,
+      clearLocalRunIds,
       requestExit,
     });
 

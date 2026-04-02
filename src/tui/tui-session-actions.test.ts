@@ -205,6 +205,142 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.updatedAt).toBe(200);
   });
 
+  it("does not restore pending users when history fetch fails before the chat log is cleared", async () => {
+    const loadHistory = vi.fn().mockRejectedValue(new Error("network down"));
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {},
+      sessions: [],
+    });
+    const addSystem = vi.fn();
+    const restorePendingUsers = vi.fn();
+    const clearAll = vi.fn();
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { loadHistory: refreshHistory } = createSessionActions({
+      client: {
+        loadHistory,
+        listSessions,
+      } as unknown as GatewayChatClient,
+      chatLog: {
+        addSystem,
+        clearAll,
+        restorePendingUsers,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshHistory();
+
+    expect(clearAll).not.toHaveBeenCalled();
+    expect(restorePendingUsers).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("history failed: Error: network down");
+  });
+
+  it("passes rebuilt user text history when restoring pending users", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-2",
+      messages: [
+        { role: "user", content: [{ type: "text", text: "queued hello" }] },
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+      ],
+    });
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {},
+      sessions: [],
+    });
+    const restorePendingUsers = vi.fn();
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { loadHistory: refreshHistory } = createSessionActions({
+      client: {
+        loadHistory,
+        listSessions,
+      } as unknown as GatewayChatClient,
+      chatLog: {
+        addSystem: vi.fn(),
+        addUser: vi.fn(),
+        finalizeAssistant: vi.fn(),
+        clearAll: vi.fn(),
+        restorePendingUsers,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshHistory();
+
+    expect(restorePendingUsers).toHaveBeenCalledWith();
+  });
+
   it("accepts older session snapshots after switching session keys", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),

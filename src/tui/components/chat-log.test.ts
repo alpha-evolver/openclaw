@@ -103,6 +103,16 @@ describe("ChatLog", () => {
     expect(chatLog.countPendingUsers()).toBe(1);
   });
 
+  it("does not append the same pending component twice when it is already mounted", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello");
+    chatLog.restorePendingUsers();
+
+    expect(chatLog.children.length).toBe(1);
+    expect(chatLog.render(120).join("\n")).toContain("queued hello");
+  });
+
   it("stops counting a pending user message once the run is committed", () => {
     const chatLog = new ChatLog(40);
 

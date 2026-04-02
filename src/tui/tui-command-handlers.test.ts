@@ -29,6 +29,7 @@ function createHarness(params?: {
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
+  const clearLocalRunIds = vi.fn();
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
@@ -62,6 +63,7 @@ function createHarness(params?: {
     noteLocalBtwRunId,
     forgetLocalRunId: vi.fn(),
     forgetLocalBtwRunId: vi.fn(),
+    clearLocalRunIds,
     requestExit: vi.fn(),
   });
 
@@ -83,6 +85,7 @@ function createHarness(params?: {
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
+    clearLocalRunIds,
     state,
   };
 }
@@ -230,12 +233,25 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
 
-  it("clears pending user messages before resetting the current session", async () => {
-    const { handleCommand, clearPendingUsers } = createHarness();
+  it("clears local run tracking and pending user messages after resetting the current session", async () => {
+    const { handleCommand, clearPendingUsers, clearLocalRunIds } = createHarness();
 
     await handleCommand("/reset");
 
+    expect(clearLocalRunIds).toHaveBeenCalledTimes(1);
     expect(clearPendingUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps pending user messages when reset fails", async () => {
+    const { handleCommand, clearPendingUsers, clearLocalRunIds, addSystem } = createHarness({
+      resetSession: vi.fn().mockRejectedValue(new Error("gateway down")),
+    });
+
+    await handleCommand("/reset");
+
+    expect(clearLocalRunIds).not.toHaveBeenCalled();
+    expect(clearPendingUsers).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("reset failed: Error: gateway down");
   });
 
   it("rejects invalid /activation values before patching the session", async () => {

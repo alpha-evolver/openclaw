@@ -68,6 +68,9 @@ export class ChatLog extends Container {
 
   restorePendingUsers() {
     for (const component of this.pendingUsers.values()) {
+      if (this.children.includes(component)) {
+        continue;
+      }
       this.append(component);
     }
   }

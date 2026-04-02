@@ -563,6 +563,141 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
   });
 
+  it("keeps non-active errored runs alive long enough for fallback finals to render", () => {
+    const { state, chatLog, loadHistory, setActivityStatus, handleChatEvent } =
+      createConcurrentRunHarness("partial");
+
+    loadHistory.mockClear();
+    setActivityStatus.mockClear();
+    chatLog.addSystem.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "other run error",
+    });
+
+    expect(state.activeChatRunId).toBe("run-active");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run error: other run error (waiting for fallback if configured)",
+    );
+    expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "other fallback ok" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("other fallback ok", "run-other");
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("terminates waiting active runs if no fallback final arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const { state, chatLog, loadHistory, setActivityStatus, handleChatEvent } =
+        createConcurrentRunHarness("partial");
+
+      loadHistory.mockClear();
+      setActivityStatus.mockClear();
+      chatLog.addSystem.mockClear();
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "error",
+        errorMessage: "API rate limit reached",
+      });
+
+      expect(state.activeChatRunId).toBe("run-active");
+      expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+
+      vi.runAllTimers();
+
+      expect(state.activeChatRunId).toBeNull();
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(setActivityStatus).toHaveBeenCalledWith("error");
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "late fallback ok" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("late fallback ok", "run-active");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cleans up timed-out fallback runs so later unrelated errors are not deduped away", () => {
+    vi.useFakeTimers();
+    try {
+      const { state, chatLog, handleChatEvent } = createConcurrentRunHarness("partial");
+
+      chatLog.addSystem.mockClear();
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "error",
+        errorMessage: "API rate limit reached",
+      });
+
+      vi.runAllTimers();
+      expect(state.activeChatRunId).toBeNull();
+
+      chatLog.addSystem.mockClear();
+      handleChatEvent({
+        runId: "run-next",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: "next partial" },
+      });
+      handleChatEvent({
+        runId: "run-next",
+        sessionKey: state.currentSessionKey,
+        state: "error",
+        errorMessage: "Second error",
+      });
+
+      expect(chatLog.addSystem).toHaveBeenCalledWith(
+        "run error: Second error (waiting for fallback if configured)",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not duplicate active-run fallback-wait error messages", () => {
+    vi.useFakeTimers();
+    try {
+      const { state, chatLog, handleChatEvent } = createConcurrentRunHarness("partial");
+
+      chatLog.addSystem.mockClear();
+
+      const errorPayload = {
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "error" as const,
+        errorMessage: "API rate limit reached",
+      };
+
+      handleChatEvent(errorPayload);
+      handleChatEvent(errorPayload);
+
+      expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears orphaned streaming state when an inactive final leaves no runs in flight", () => {
     const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
