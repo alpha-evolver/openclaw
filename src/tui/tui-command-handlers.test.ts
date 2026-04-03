@@ -22,14 +22,10 @@ function createHarness(params?: {
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
   const addUser = vi.fn();
-  const addPendingUser = vi.fn();
   const addSystem = vi.fn();
-  const dropPendingUser = vi.fn();
-  const clearPendingUsers = vi.fn();
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
-  const clearLocalRunIds = vi.fn();
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
@@ -38,13 +34,14 @@ function createHarness(params?: {
   const state = {
     currentSessionKey: "agent:main:main",
     activeChatRunId: params?.activeChatRunId ?? null,
+    pendingOptimisticUserMessage: false,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
 
   const { handleCommand } = createCommandHandlers({
     client: { sendChat, patchSession, resetSession } as never,
-    chatLog: { addUser, addPendingUser, addSystem, dropPendingUser, clearPendingUsers } as never,
+    chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
     state: state as never,
@@ -63,7 +60,6 @@ function createHarness(params?: {
     noteLocalBtwRunId,
     forgetLocalRunId: vi.fn(),
     forgetLocalBtwRunId: vi.fn(),
-    clearLocalRunIds,
     requestExit: vi.fn(),
   });
 
@@ -74,10 +70,7 @@ function createHarness(params?: {
     resetSession,
     setSession,
     addUser,
-    addPendingUser,
     addSystem,
-    dropPendingUser,
-    clearPendingUsers,
     requestRender,
     loadHistory,
     refreshSessionInfo,
@@ -85,7 +78,6 @@ function createHarness(params?: {
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
-    clearLocalRunIds,
     state,
   };
 }
@@ -120,12 +112,12 @@ describe("tui command handlers", () => {
   });
 
   it("forwards unknown slash commands to the gateway", async () => {
-    const { handleCommand, sendChat, addPendingUser, addSystem, requestRender } = createHarness();
+    const { handleCommand, sendChat, addUser, addSystem, requestRender } = createHarness();
 
     await handleCommand("/context");
 
     expect(addSystem).not.toHaveBeenCalled();
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/context");
+    expect(addUser).toHaveBeenCalledWith("/context");
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -135,13 +127,14 @@ describe("tui command handlers", () => {
     expect(requestRender).toHaveBeenCalled();
   });
 
-  it("binds local runs immediately so pending messages survive refreshes", async () => {
+  it("defers local run binding until gateway events provide a real run id", async () => {
     const { handleCommand, noteLocalRunId, state } = createHarness();
 
     await handleCommand("/context");
 
-    expect(noteLocalRunId).toHaveBeenCalledTimes(1);
+    expect(noteLocalRunId).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(true);
   });
 
   it("sends /btw without hijacking the active main run", async () => {
@@ -191,16 +184,16 @@ describe("tui command handlers", () => {
 
   it("reports send failures and marks activity status as error", async () => {
     const setActivityStatus = vi.fn();
-    const { handleCommand, addSystem, dropPendingUser } = createHarness({
+    const { handleCommand, addSystem, state } = createHarness({
       sendChat: vi.fn().mockRejectedValue(new Error("gateway down")),
       setActivityStatus,
     });
 
     await handleCommand("/context");
 
-    expect(dropPendingUser).toHaveBeenCalledTimes(1);
     expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
+    expect(state.pendingOptimisticUserMessage).toBe(false);
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
@@ -219,39 +212,16 @@ describe("tui command handlers", () => {
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {
-    const { handleCommand, sendChat, addPendingUser, addSystem, setActivityStatus } = createHarness(
-      {
-        isConnected: false,
-      },
-    );
+    const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
+      isConnected: false,
+    });
 
     await handleCommand("/context");
 
     expect(sendChat).not.toHaveBeenCalled();
-    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
-  });
-
-  it("clears local run tracking and pending user messages after resetting the current session", async () => {
-    const { handleCommand, clearPendingUsers, clearLocalRunIds } = createHarness();
-
-    await handleCommand("/reset");
-
-    expect(clearLocalRunIds).toHaveBeenCalledTimes(1);
-    expect(clearPendingUsers).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps pending user messages when reset fails", async () => {
-    const { handleCommand, clearPendingUsers, clearLocalRunIds, addSystem } = createHarness({
-      resetSession: vi.fn().mockRejectedValue(new Error("gateway down")),
-    });
-
-    await handleCommand("/reset");
-
-    expect(clearLocalRunIds).not.toHaveBeenCalled();
-    expect(clearPendingUsers).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("reset failed: Error: gateway down");
   });
 
   it("rejects invalid /activation values before patching the session", async () => {

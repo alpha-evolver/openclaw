@@ -203,6 +203,7 @@ export async function runTui(opts: TuiOptions) {
   let initialSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
+  let pendingOptimisticUserMessage = false;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -273,6 +274,12 @@ export async function runTui(opts: TuiOptions) {
     },
     set activeChatRunId(value) {
       activeChatRunId = value;
+    },
+    get pendingOptimisticUserMessage() {
+      return pendingOptimisticUserMessage;
+    },
+    set pendingOptimisticUserMessage(value) {
+      pendingOptimisticUserMessage = value;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -465,14 +472,9 @@ export async function runTui(opts: TuiOptions) {
     );
   };
 
-  const busyStates = new Set(["sending", "waiting", "streaming", "running", "awaiting follow-up"]);
+  const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
-
-  const formatPendingStatusSuffix = () => {
-    const pendingCount = chatLog.countPendingUsers();
-    return pendingCount > 0 ? ` | pending ${pendingCount}` : "";
-  };
 
   const formatElapsed = (startMs: number) => {
     const totalSeconds = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
@@ -529,21 +531,12 @@ export async function runTui(opts: TuiOptions) {
           elapsed,
           connectionStatus,
           phrases: waitingPhrase ? [waitingPhrase] : undefined,
-        }) + formatPendingStatusSuffix(),
+        }),
       );
       return;
     }
 
-    if (activityStatus === "awaiting follow-up") {
-      statusLoader.setMessage(
-        `awaiting follow-up event • ${elapsed} | ${connectionStatus}${formatPendingStatusSuffix()}`,
-      );
-      return;
-    }
-
-    statusLoader.setMessage(
-      `${activityStatus} • ${elapsed} | ${connectionStatus}${formatPendingStatusSuffix()}`,
-    );
+    statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
   };
 
   const startStatusTimer = () => {
@@ -618,9 +611,7 @@ export async function runTui(opts: TuiOptions) {
       statusLoader?.stop();
       statusLoader = null;
       ensureStatusText();
-      const text = activityStatus
-        ? `${connectionStatus} | ${activityStatus}${formatPendingStatusSuffix()}`
-        : `${connectionStatus}${formatPendingStatusSuffix()}`;
+      const text = activityStatus ? `${connectionStatus} | ${activityStatus}` : connectionStatus;
       statusText?.setText(theme.dim(text));
     }
     lastActivityStatus = activityStatus;
@@ -728,6 +719,7 @@ export async function runTui(opts: TuiOptions) {
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
+    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -768,7 +760,6 @@ export async function runTui(opts: TuiOptions) {
       noteLocalBtwRunId,
       forgetLocalRunId,
       forgetLocalBtwRunId,
-      clearLocalRunIds,
       requestExit,
     });
 

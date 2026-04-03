@@ -10,7 +10,6 @@ type HandlerChatLog = {
   updateAssistant: (...args: unknown[]) => void;
   finalizeAssistant: (...args: unknown[]) => void;
   dropAssistant: (...args: unknown[]) => void;
-  commitPendingUser: (...args: unknown[]) => boolean;
 };
 type HandlerBtwPresenter = {
   showResult: (...args: unknown[]) => void;
@@ -24,7 +23,6 @@ type MockChatLog = {
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
   dropAssistant: MockFn;
-  commitPendingUser: MockFn;
 };
 type MockBtwPresenter = {
   showResult: MockFn;
@@ -40,7 +38,6 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     updateAssistant: vi.fn(),
     finalizeAssistant: vi.fn(),
     dropAssistant: vi.fn(),
-    commitPendingUser: vi.fn(() => false),
   } as unknown as MockChatLog & HandlerChatLog;
 }
 
@@ -61,6 +58,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
     activeChatRunId: "run-1",
+    pendingOptimisticUserMessage: false,
     historyLoaded: true,
     sessionInfo: { verboseLevel: "on" },
     initialSessionApplied: true,
@@ -129,6 +127,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       setActivityStatus: context.setActivityStatus,
       loadHistory: context.loadHistory,
+      noteLocalRunId: context.noteLocalRunId,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
       isLocalBtwRunId: context.isLocalBtwRunId,
@@ -469,20 +468,22 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("commits local pending messages once the gateway starts their run", () => {
-    const { state, chatLog, noteLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
+  it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
+    const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
     });
 
-    noteLocalRunId("run-gateway");
     handleChatEvent({
       runId: "run-gateway",
       sessionKey: state.currentSessionKey,
-      state: "delta",
-      message: { content: "working" },
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
     });
 
-    expect(chatLog.commitPendingUser).toHaveBeenCalledWith("run-gateway");
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.activeChatRunId).toBeNull();
+    expect(isLocalRunId("run-gateway")).toBe(false);
+    expect(loadHistory).not.toHaveBeenCalled();
   });
 
   function createConcurrentRunHarness(localContent = "partial") {
@@ -527,200 +528,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("continued", "run-active");
-  });
-
-  it("keeps active runs alive across chat error events so fallback output can still render", () => {
-    const { state, chatLog, loadHistory, setActivityStatus, handleChatEvent } =
-      createConcurrentRunHarness("partial");
-
-    loadHistory.mockClear();
-    setActivityStatus.mockClear();
-    chatLog.addSystem.mockClear();
-    chatLog.finalizeAssistant.mockClear();
-
-    handleChatEvent({
-      runId: "run-active",
-      sessionKey: state.currentSessionKey,
-      state: "error",
-      errorMessage: "API rate limit reached",
-    });
-
-    expect(state.activeChatRunId).toBe("run-active");
-    expect(loadHistory).not.toHaveBeenCalled();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(
-      "run error: API rate limit reached (waiting for fallback if configured)",
-    );
-    expect(setActivityStatus).toHaveBeenCalledWith("waiting");
-
-    handleChatEvent({
-      runId: "run-active",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-      message: { content: [{ type: "text", text: "fallback ok" }] },
-    });
-
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("fallback ok", "run-active");
-    expect(state.activeChatRunId).toBeNull();
-  });
-
-  it("keeps non-active errored runs alive long enough for fallback finals to render", () => {
-    const { state, chatLog, loadHistory, setActivityStatus, handleChatEvent } =
-      createConcurrentRunHarness("partial");
-
-    loadHistory.mockClear();
-    setActivityStatus.mockClear();
-    chatLog.addSystem.mockClear();
-    chatLog.finalizeAssistant.mockClear();
-
-    handleChatEvent({
-      runId: "run-other",
-      sessionKey: state.currentSessionKey,
-      state: "error",
-      errorMessage: "other run error",
-    });
-
-    expect(state.activeChatRunId).toBe("run-active");
-    expect(loadHistory).not.toHaveBeenCalled();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(
-      "run error: other run error (waiting for fallback if configured)",
-    );
-    expect(setActivityStatus).not.toHaveBeenCalledWith("waiting");
-
-    handleChatEvent({
-      runId: "run-other",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-      message: { content: [{ type: "text", text: "other fallback ok" }] },
-    });
-
-    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("other fallback ok", "run-other");
-    expect(state.activeChatRunId).toBe("run-active");
-  });
-
-  it("terminates waiting active runs if no fallback final arrives", () => {
-    vi.useFakeTimers();
-    try {
-      const { state, chatLog, loadHistory, setActivityStatus, handleChatEvent } =
-        createConcurrentRunHarness("partial");
-
-      loadHistory.mockClear();
-      setActivityStatus.mockClear();
-      chatLog.addSystem.mockClear();
-
-      handleChatEvent({
-        runId: "run-active",
-        sessionKey: state.currentSessionKey,
-        state: "error",
-        errorMessage: "API rate limit reached",
-      });
-
-      expect(state.activeChatRunId).toBe("run-active");
-      expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
-
-      vi.runAllTimers();
-
-      expect(state.activeChatRunId).toBeNull();
-      expect(loadHistory).toHaveBeenCalledTimes(1);
-      expect(setActivityStatus).toHaveBeenCalledWith("error");
-
-      handleChatEvent({
-        runId: "run-active",
-        sessionKey: state.currentSessionKey,
-        state: "final",
-        message: { content: [{ type: "text", text: "late fallback ok" }] },
-      });
-
-      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("late fallback ok", "run-active");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cleans up timed-out fallback runs so later unrelated errors are not deduped away", () => {
-    vi.useFakeTimers();
-    try {
-      const { state, chatLog, handleChatEvent } = createConcurrentRunHarness("partial");
-
-      chatLog.addSystem.mockClear();
-
-      handleChatEvent({
-        runId: "run-active",
-        sessionKey: state.currentSessionKey,
-        state: "error",
-        errorMessage: "API rate limit reached",
-      });
-
-      vi.runAllTimers();
-      expect(state.activeChatRunId).toBeNull();
-
-      chatLog.addSystem.mockClear();
-      handleChatEvent({
-        runId: "run-next",
-        sessionKey: state.currentSessionKey,
-        state: "delta",
-        message: { content: "next partial" },
-      });
-      handleChatEvent({
-        runId: "run-next",
-        sessionKey: state.currentSessionKey,
-        state: "error",
-        errorMessage: "Second error",
-      });
-
-      expect(chatLog.addSystem).toHaveBeenCalledWith(
-        "run error: Second error (waiting for fallback if configured)",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not duplicate active-run fallback-wait error messages", () => {
-    vi.useFakeTimers();
-    try {
-      const { state, chatLog, handleChatEvent } = createConcurrentRunHarness("partial");
-
-      chatLog.addSystem.mockClear();
-
-      const errorPayload = {
-        runId: "run-active",
-        sessionKey: state.currentSessionKey,
-        state: "error" as const,
-        errorMessage: "API rate limit reached",
-      };
-
-      handleChatEvent(errorPayload);
-      handleChatEvent(errorPayload);
-
-      expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears orphaned streaming state when an inactive final leaves no runs in flight", () => {
-    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null },
-    });
-
-    handleChatEvent({
-      runId: "run-orphan",
-      sessionKey: state.currentSessionKey,
-      state: "delta",
-      message: { content: "partial" },
-    });
-    expect(state.activeChatRunId).toBe("run-orphan");
-    state.activeChatRunId = null;
-    setActivityStatus.mockClear();
-
-    handleChatEvent({
-      runId: "run-orphan",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-      message: { content: [{ type: "text", text: "done" }] },
-    });
-
-    expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
   it("suppresses non-local empty final placeholders during concurrent runs", () => {

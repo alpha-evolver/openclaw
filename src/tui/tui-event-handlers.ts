@@ -3,8 +3,6 @@ import { asString, extractTextFromMessage, isCommandMessage } from "./tui-format
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
-const FALLBACK_WAIT_TIMEOUT_MS = 2_000;
-
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
   updateToolResult: (
@@ -16,7 +14,6 @@ type EventHandlerChatLog = {
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
-  commitPendingUser?: (runId: string) => boolean;
 };
 
 type EventHandlerTui = {
@@ -36,6 +33,7 @@ type EventHandlerContext = {
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
+  noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
@@ -53,6 +51,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
+    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -62,8 +61,6 @@ export function createEventHandlers(context: EventHandlerContext) {
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
-  const fallbackWaitTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const erroredRuns = new Set<string>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -96,15 +93,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     lastSessionKey = state.currentSessionKey;
-    for (const timer of fallbackWaitTimers.values()) {
-      clearTimeout(timer);
-    }
-    fallbackWaitTimers.clear();
-    erroredRuns.clear();
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
+    state.pendingOptimisticUserMessage = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
@@ -136,39 +129,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  const shouldClearOrphanedActivityStatus = () => !state.activeChatRunId && sessionRuns.size === 0;
-
-  const commitPendingUserForRun = (runId: string) => {
-    const committed = chatLog.commitPendingUser?.(runId) ?? false;
-    if (committed) {
-      setActivityStatus(state.activityStatus);
-    }
-  };
-
-  const clearFallbackWait = (runId: string) => {
-    const timer = fallbackWaitTimers.get(runId);
-    if (!timer) {
-      return false;
-    }
-    clearTimeout(timer);
-    fallbackWaitTimers.delete(runId);
-    return true;
-  };
-
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
     status: "idle" | "error";
   }) => {
-    clearFallbackWait(params.runId);
-    erroredRuns.delete(params.runId);
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
-    } else if (shouldClearOrphanedActivityStatus()) {
-      setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
   };
@@ -178,44 +148,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "aborted" | "error";
   }) => {
-    clearFallbackWait(params.runId);
-    erroredRuns.delete(params.runId);
-    noteFinalizedRun(params.runId);
+    streamAssembler.drop(params.runId);
+    sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
-    } else if (shouldClearOrphanedActivityStatus()) {
-      setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
-  };
-
-  const waitForFallbackOrTerminate = (runId: string) => {
-    const existing = fallbackWaitTimers.get(runId);
-    if (existing) {
-      clearTimeout(existing);
-    }
-    const timer = setTimeout(() => {
-      fallbackWaitTimers.delete(runId);
-      const wasActiveRun = state.activeChatRunId === runId;
-      erroredRuns.delete(runId);
-      streamAssembler.drop(runId);
-      sessionRuns.delete(runId);
-      clearActiveRunIfMatch(runId);
-      flushPendingHistoryRefreshIfIdle();
-      if (wasActiveRun) {
-        setActivityStatus("error");
-      } else if (shouldClearOrphanedActivityStatus()) {
-        setActivityStatus("idle");
-      }
-      maybeRefreshHistoryForRun(runId, {
-        allowLocalWithoutDisplayableFinal: true,
-      });
-      void refreshSessionInfo?.();
-      tui.requestRender();
-    }, FALLBACK_WAIT_TIMEOUT_MS);
-    fallbackWaitTimers.set(runId, timer);
   };
 
   const hasConcurrentActiveRun = (runId: string) => {
@@ -284,15 +224,20 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
-      return;
-    }
-    if (evt.state !== "error") {
-      clearFallbackWait(evt.runId);
+      if (evt.state === "delta") {
+        return;
+      }
+      if (evt.state === "final") {
+        return;
+      }
     }
     noteSessionRun(evt.runId);
-    commitPendingUserForRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
+      if (state.pendingOptimisticUserMessage) {
+        noteLocalRunId?.(evt.runId);
+        state.pendingOptimisticUserMessage = false;
+      }
     }
     if (evt.state === "delta") {
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
@@ -367,16 +312,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!erroredRuns.has(evt.runId)) {
-        chatLog.addSystem(
-          `run error: ${evt.errorMessage ?? "unknown"} (waiting for fallback if configured)`,
-        );
-      }
-      erroredRuns.add(evt.runId);
-      if (wasActiveRun) {
-        setActivityStatus("waiting");
-      }
-      waitForFallbackOrTerminate(evt.runId);
+      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
+      maybeRefreshHistoryForRun(evt.runId);
     }
     tui.requestRender();
   };

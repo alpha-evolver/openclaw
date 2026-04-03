@@ -10,7 +10,14 @@ export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
-  private pendingUsers = new Map<string, UserMessageComponent>();
+  private pendingUsers = new Map<
+    string,
+    {
+      component: UserMessageComponent;
+      text: string;
+      createdAt: number;
+    }
+  >();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
 
@@ -30,8 +37,8 @@ export class ChatLog extends Container {
         this.streamingRuns.delete(runId);
       }
     }
-    for (const [runId, message] of this.pendingUsers.entries()) {
-      if (message === component) {
+    for (const [runId, entry] of this.pendingUsers.entries()) {
+      if (entry.component === component) {
         this.pendingUsers.delete(runId);
       }
     }
@@ -67,17 +74,17 @@ export class ChatLog extends Container {
   }
 
   restorePendingUsers() {
-    for (const component of this.pendingUsers.values()) {
-      if (this.children.includes(component)) {
+    for (const entry of this.pendingUsers.values()) {
+      if (this.children.includes(entry.component)) {
         continue;
       }
-      this.append(component);
+      this.append(entry.component);
     }
   }
 
   clearPendingUsers() {
-    for (const component of this.pendingUsers.values()) {
-      this.removeChild(component);
+    for (const entry of this.pendingUsers.values()) {
+      this.removeChild(entry.component);
     }
     this.pendingUsers.clear();
   }
@@ -97,14 +104,16 @@ export class ChatLog extends Container {
     this.append(new UserMessageComponent(text));
   }
 
-  addPendingUser(runId: string, text: string) {
+  addPendingUser(runId: string, text: string, createdAt = Date.now()) {
     const existing = this.pendingUsers.get(runId);
     if (existing) {
-      existing.setText(text);
-      return existing;
+      existing.text = text;
+      existing.createdAt = createdAt;
+      existing.component.setText(text);
+      return existing.component;
     }
     const component = new UserMessageComponent(text);
-    this.pendingUsers.set(runId, component);
+    this.pendingUsers.set(runId, { component, text, createdAt });
     this.append(component);
     return component;
   }
@@ -118,9 +127,48 @@ export class ChatLog extends Container {
     if (!existing) {
       return false;
     }
-    this.removeChild(existing);
+    this.removeChild(existing.component);
     this.pendingUsers.delete(runId);
     return true;
+  }
+
+  hasPendingUser(runId: string) {
+    return this.pendingUsers.has(runId);
+  }
+
+  reconcilePendingUsers(
+    historyUsers: Array<{
+      text: string;
+      timestamp?: number | null;
+    }>,
+  ) {
+    const normalizedHistory = historyUsers
+      .map((entry) => ({
+        text: entry.text.trim(),
+        timestamp: typeof entry.timestamp === "number" ? entry.timestamp : null,
+      }))
+      .filter((entry) => entry.text.length > 0 && entry.timestamp !== null);
+    const clearedRunIds: string[] = [];
+    for (const [runId, entry] of this.pendingUsers.entries()) {
+      const pendingText = entry.text.trim();
+      if (!pendingText) {
+        continue;
+      }
+      const matchIndex = normalizedHistory.findIndex(
+        (historyEntry) =>
+          historyEntry.text === pendingText && (historyEntry.timestamp ?? 0) >= entry.createdAt,
+      );
+      if (matchIndex === -1) {
+        continue;
+      }
+      if (this.children.includes(entry.component)) {
+        this.removeChild(entry.component);
+      }
+      this.pendingUsers.delete(runId);
+      clearedRunIds.push(runId);
+      normalizedHistory.splice(matchIndex, 1);
+    }
+    return clearedRunIds;
   }
 
   countPendingUsers() {

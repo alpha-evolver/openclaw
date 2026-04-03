@@ -123,4 +123,27 @@ describe("ChatLog", () => {
     expect(chatLog.countPendingUsers()).toBe(0);
     expect(chatLog.render(120).join("\n")).toContain("hello");
   });
+
+  it("reconciles pending users against rebuilt history using timestamps", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello", 2_000);
+
+    expect(
+      chatLog.reconcilePendingUsers([
+        { text: "queued hello", timestamp: 2_100 },
+        { text: "older", timestamp: 1_000 },
+      ]),
+    ).toEqual(["run-1"]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("does not hide a new repeated prompt when only older history matches", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "continue", 5_000);
+
+    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: 4_000 }])).toEqual([]);
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
 });
