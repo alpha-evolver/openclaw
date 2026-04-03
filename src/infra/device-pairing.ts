@@ -458,14 +458,12 @@ export async function approveDevicePairing(
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[]; approvedScopesOverride?: readonly string[] },
+  options: { callerScopes?: readonly string[] },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  optionsOrBaseDir?:
-    | { callerScopes?: readonly string[]; approvedScopesOverride?: readonly string[] }
-    | string,
+  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   const options =
@@ -479,14 +477,10 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    const approvedScopesOverride = normalizeDeviceAuthScopes(
-      options?.approvedScopesOverride ? [...options.approvedScopesOverride] : undefined,
-    );
     const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
-    const requestedOperatorScopes = normalizeDeviceAuthScopes([
-      ...(pending.scopes ?? []),
-      ...approvedScopesOverride,
-    ]).filter((scope) => scope.startsWith(OPERATOR_SCOPE_PREFIX));
+    const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+      scope.startsWith(OPERATOR_SCOPE_PREFIX),
+    );
     if (requestedOperatorScopes.length > 0) {
       if (!options?.callerScopes) {
         return {
@@ -512,7 +506,6 @@ export async function approveDevicePairing(
     const approvedScopes = mergeScopes(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
-      approvedScopesOverride,
     );
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     const roleForToken = normalizeRole(pending.role);
