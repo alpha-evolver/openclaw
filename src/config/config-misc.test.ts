@@ -555,6 +555,91 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy sandbox perSession via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        agents: {
+          defaults: {
+            sandbox: {
+              perSession: true,
+            },
+          },
+          list: [
+            {
+              id: "pi",
+              sandbox: {
+                perSession: false,
+              },
+            },
+          ],
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
+      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({
+        scope: "session",
+      });
+      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({
+        scope: "shared",
+      });
+    });
+  });
+
+  it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          telegram: {
+            streamMode: "block",
+          },
+          discord: {
+            streaming: false,
+            accounts: {
+              work: {
+                streamMode: "block",
+              },
+            },
+          },
+          slack: {
+            streaming: true,
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.telegram")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
+      expect(snap.sourceConfig.channels?.telegram).toMatchObject({
+        streaming: "block",
+      });
+      expect(
+        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+      ).toBeUndefined();
+      expect(snap.sourceConfig.channels?.discord).toMatchObject({
+        streaming: "off",
+      });
+      expect(snap.sourceConfig.channels?.discord?.accounts?.work).toMatchObject({
+        streaming: "block",
+      });
+      expect(snap.sourceConfig.channels?.slack).toMatchObject({
+        streaming: "partial",
+        nativeStreaming: true,
+      });
+    });
+  });
+
   it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
