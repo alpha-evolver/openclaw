@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import projectsConfig from "../vitest.projects.config.ts";
+import baseConfig from "../vitest.config.ts";
 
 describe("projects vitest config", () => {
-  it("defines named unit and boundary projects", () => {
-    expect(projectsConfig.test?.projects).toHaveLength(2);
-    expect(projectsConfig.test?.projects?.map((project) => project.test?.name)).toEqual([
-      "unit",
-      "boundary",
+  it("defines unit, boundary, acp, and ui project config files at the root", () => {
+    expect(baseConfig.test?.projects).toEqual([
+      "vitest.unit.config.ts",
+      "vitest.boundary.config.ts",
+      "vitest.acp.config.ts",
+      "vitest.ui.config.ts",
     ]);
   });
 });
