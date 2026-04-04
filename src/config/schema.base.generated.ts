@@ -21043,7 +21043,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.exec.applyPatch.allowModels": {
       label: "apply_patch Model Allowlist",
-      help: 'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+      help: 'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
       tags: ["access", "tools"],
     },
     "tools.loopDetection.enabled": {
@@ -22338,7 +22338,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "models.mode": {
       label: "Model Catalog Mode",
-      help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, matching model contextWindow/maxTokens use the higher value between explicit and implicit entries, and explicit contextTokens runtime caps are preserved.',
+      help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
       tags: ["models"],
     },
     "models.providers": {
@@ -24496,6 +24496,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.3",
+  version: "2026.4.4",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;
